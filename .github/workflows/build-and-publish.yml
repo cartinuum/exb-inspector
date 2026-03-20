@@ -1,0 +1,210 @@
+name: Build and publish Experience Builder widget
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  EXB_VERSION: ${{ vars.EXB_VERSION }}
+  EXB_ROOT: ${{ vars.EXB_ROOT }}
+  EXT_REPO_NAME: ${{ vars.EXT_REPO_NAME }}
+  WIDGET_NAME: ${{ vars.WIDGET_NAME }}
+  EXB_SDK_URL: ${{ vars.EXB_SDK_URL }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout widget source
+        uses: actions/checkout@v4
+
+      - name: Validate required variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "${EXB_VERSION}" || (echo "Missing EXB_VERSION" && exit 1)
+          test -n "${EXB_ROOT}" || (echo "Missing EXB_ROOT" && exit 1)
+          test -n "${EXT_REPO_NAME}" || (echo "Missing EXT_REPO_NAME" && exit 1)
+          test -n "${WIDGET_NAME}" || (echo "Missing WIDGET_NAME" && exit 1)
+          test -n "${EXB_SDK_URL}" || (echo "Missing EXB_SDK_URL" && exit 1)
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          # cache: npm
+          # cache-dependency-path: |
+          #   exb/client/package-lock.json
+
+      - name: Restore cached Experience Builder SDK
+        id: cache-exb
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.EXB_ROOT }}
+          key: exb-sdk-${{ runner.os }}-${{ env.EXB_VERSION }}
+
+      - name: Download Experience Builder SDK
+        if: steps.cache-exb.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Downloading Experience Builder SDK from:"
+          echo "${EXB_SDK_URL}"
+
+          rm -f exb.zip
+          rm -rf __sdk_extract
+          mkdir -p __sdk_extract
+
+          curl -fL "${EXB_SDK_URL}" -o exb.zip
+          unzip -q exb.zip -d __sdk_extract
+
+          echo "Top-level extracted contents:"
+          ls -la __sdk_extract
+
+          top_dir=$(find __sdk_extract -mindepth 1 -maxdepth 1 -type d | head -n 1)
+
+          if [ -z "${top_dir}" ]; then
+            echo "Could not find extracted Experience Builder directory"
+            exit 1
+          fi
+
+          echo "Using extracted SDK directory: ${top_dir}"
+
+          rm -rf "${EXB_ROOT}"
+          mv "${top_dir}" "${EXB_ROOT}"
+
+      - name: Copy widget into Experience Builder
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          src="widgets/${WIDGET_NAME}"
+          dest="${EXB_ROOT}/client/your-extensions/widgets/${WIDGET_NAME}"
+
+          if [ ! -d "${src}" ]; then
+            echo "Widget source folder not found: ${src}"
+            exit 1
+          fi
+
+          rm -rf "${dest}"
+          mkdir -p "$(dirname "${dest}")"
+
+          tar -C "widgets" -cf - "${WIDGET_NAME}" | tar -xf - -C "${EXB_ROOT}/client/your-extensions/widgets"
+
+          echo "Copied widget to: ${dest}"
+          find "${dest}" -maxdepth 2 -type f | sort | head -50
+          
+      - name: Install Experience Builder client dependencies
+        working-directory: ${{ env.EXB_ROOT }}/client
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Build widget bundle
+        working-directory: ${{ env.EXB_ROOT }}/client
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if npm run | grep -q "build:for-download"; then
+            npm run build:for-download
+            echo "BUILD_OUT=dist-download/widgets" >> "$GITHUB_ENV"
+          else
+            npm run build:prod
+            echo "BUILD_OUT=dist-prod/widgets" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify built widget exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${EXB_ROOT}/client/${BUILD_OUT}/${WIDGET_NAME}/manifest.json" ]; then
+            echo "Built widget manifest not found at ${EXB_ROOT}/client/${BUILD_OUT}/${WIDGET_NAME}/manifest.json"
+            exit 1
+          fi
+
+      - name: Prepare Pages content
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf site
+          mkdir -p site/latest
+
+          cp -R "${EXB_ROOT}/client/${BUILD_OUT}/${WIDGET_NAME}" "site/latest/"
+
+          if [ -d "${EXB_ROOT}/client/${BUILD_OUT}/chunks" ]; then
+            cp -R "${EXB_ROOT}/client/${BUILD_OUT}/chunks" "site/latest/"
+          fi
+
+          if [ -d "${EXB_ROOT}/client/${BUILD_OUT}/shared-code" ]; then
+            cp -R "${EXB_ROOT}/client/${BUILD_OUT}/shared-code" "site/latest/"
+          fi
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            mkdir -p "site/${VERSION}"
+
+            cp -R "${EXB_ROOT}/client/${BUILD_OUT}/${WIDGET_NAME}" "site/${VERSION}/"
+
+            if [ -d "${EXB_ROOT}/client/${BUILD_OUT}/chunks" ]; then
+              cp -R "${EXB_ROOT}/client/${BUILD_OUT}/chunks" "site/${VERSION}/"
+            fi
+
+            if [ -d "${EXB_ROOT}/client/${BUILD_OUT}/shared-code" ]; then
+              cp -R "${EXB_ROOT}/client/${BUILD_OUT}/shared-code" "site/${VERSION}/"
+            fi
+          fi
+
+          touch site/.nojekyll
+
+      - name: List generated site files
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Generated site structure:"
+          find site -maxdepth 6 | sort
+
+      - name: Upload Pages artifact
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Skip Pages artifact upload when running under act
+        if: ${{ env.ACT == 'true' }}
+        run: echo "Skipping Pages artifact upload under act"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+
+    steps:
+      - name: Deploy to GitHub Pages
+        if: ${{ env.ACT != 'true' }}
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Skip deploy when running under act
+        if: ${{ env.ACT == 'true' }}
+        run: echo "Skipping GitHub Pages deploy under act"

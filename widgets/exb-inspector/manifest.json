@@ -1,0 +1,22 @@
+{
+  "name": "exb-inspector",
+  "label": "Experience ID Inspector",
+  "type": "widget",
+  "version": "0.0.1",
+  "exbVersion": "1.14.0",
+  "author": "Cartinuum",
+  "description": "Admin utility: layer data source IDs and widget instance IDs on the current page. Builder only. Not for production end users.",
+  "copyright": "",
+  "dependency": "jimu-arcgis",
+  "license": "MIT",
+  "defaultSize": {
+    "width": 400,
+    "height": 600
+  },
+  "extensions": [],
+  "messageActions": [],
+  "properties": {
+    "supportAutoSize": false
+  },
+  "translatedLocales": ["en"]
+}

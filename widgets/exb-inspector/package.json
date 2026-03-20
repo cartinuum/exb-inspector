@@ -1,0 +1,15 @@
+{
+  "name": "exb-inspector",
+  "version": "0.0.1",
+  "description": "Experience Builder admin widget: layer IDs and widget IDs",
+  "main": "src/runtime/widget.tsx",
+  "scripts": {
+    "build": "echo 'Build handled by parent project'",
+    "test": "echo 'Tests handled by parent project'"
+  },
+  "keywords": ["arcgis", "experience-builder", "widget", "admin"],
+  "author": "Cartinuum",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}
